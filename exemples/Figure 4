@@ -1,0 +1,374 @@
+function IAF_Figura4_Inclinacao_Avaliacao()
+% IAF_Figura4_Inclinacao.m
+% Figure 4: effect of magnetization inclination on angular operators.
+% Independent script based on the synthetic two-prism model in
+% IAF_Figura2_Organizada_v6.m. The original V6 file is not modified.
+%
+% Controlled experiment:
+% - Inclination: 30, 45, and 60 degrees.
+% - Declination, prism geometry, observation grid, and magnetization
+%   magnitude are held constant.
+% - Magnetization direction and inducing-field direction remain parallel,
+%   as in the V6 model (mHat = fHat).
+% - Clean fields only in this first comparison; noise is not added.
+%
+% Run in MATLAB or GNU Octave: IAF_Figura4_Inclinacao_Avaliacao
+
+clear; close all; clc;
+
+%% 1. Observation grid (same as V6)
+dxObs = 10;
+dyObs = 10;
+xObs = -500:dxObs:500;
+yObs = -200:dyObs:200;
+[Xobs,Yobs] = meshgrid(xObs,yObs);
+
+%% 2. Fixed physical and geometric parameters
+inclinations = [30 45 60];
+declination = 0;
+M = 1;
+mu0_over_4pi = 1e-7;
+epsilon = 1e-6;
+zTop = -5;
+zObs = 0;
+zBottom = 5;
+
+shallow.x = [-300 -120];
+shallow.y = [-60 60];
+shallow.z = [70 150];
+shallow.n = [9 6 6];
+
+deep.x = [220 500];
+deep.y = [-90 90];
+deep.z = [220 360];
+deep.n = [14 9 8];
+
+[srcX1,srcY1,srcZ1,vol1] = prism_cells(shallow.x,shallow.y,shallow.z,shallow.n);
+[srcX2,srcY2,srcZ2,vol2] = prism_cells(deep.x,deep.y,deep.z,deep.n);
+srcX = [srcX1;srcX2];
+srcY = [srcY1;srcY2];
+srcZ = [srcZ1;srcZ2];
+cellVol = [repmat(vol1,numel(srcX1),1);repmat(vol2,numel(srcX2),1)];
+
+%% 3. Calculate clean fields and operators for each inclination
+nI = numel(inclinations);
+ISA_all = cell(1,nI);
+Theta_all = cell(1,nI);
+IAF_all = cell(1,nI);
+T_all = cell(1,nI);
+
+for k = 1:nI
+    incRad = inclinations(k)*pi/180;
+    decRad = declination*pi/180;
+    mHat = [cos(incRad)*cos(decRad), cos(incRad)*sin(decRad), sin(incRad)];
+    fHat = mHat; % keep the V6 assumption: magnetization parallel to field
+
+    T = total_field_variable_cells(Xobs,Yobs,zObs,srcX,srcY,srcZ, ...
+        cellVol,M,mHat,fHat,mu0_over_4pi);
+    Ttop = total_field_variable_cells(Xobs,Yobs,zTop,srcX,srcY,srcZ, ...
+        cellVol,M,mHat,fHat,mu0_over_4pi);
+    Tbottom = total_field_variable_cells(Xobs,Yobs,zBottom,srcX,srcY,srcZ, ...
+        cellVol,M,mHat,fHat,mu0_over_4pi);
+
+    [dTdx,~] = gradient(T,dxObs,dyObs);
+    dTdz = (Tbottom-Ttop)/(zBottom-zTop);
+    [ISA,Theta,IAF] = operators_from_derivatives(dTdx,dTdz,epsilon);
+
+    T_all{k} = T;
+    ISA_all{k} = ISA;
+    Theta_all{k} = Theta;
+    IAF_all{k} = IAF;
+end
+
+%% 4. Maps: rows = inclination, columns = operator
+methods = {ISA_all,Theta_all,IAF_all};
+methodNames = {'ISA','Theta','IAF'};
+figMaps = figure('Color','w','Position',[40 40 1700 1100], ...
+    'Name','IAF Figure 4 - Inclination maps');
+
+% Common color limits across inclinations for each operator.
+clims = zeros(3,2);
+for j = 1:3
+    vals = [];
+    for k = 1:nI
+        vals = [vals; methods{j}{k}(:)]; %#ok<AGROW>
+    end
+    if j == 1
+        lim = max(abs(vals));
+        clims(j,:) = [-lim lim];
+    else
+        clims(j,:) = [min(vals) max(vals)];
+        if clims(j,1) == clims(j,2), clims(j,2) = clims(j,1)+1; end
+    end
+end
+
+for k = 1:nI
+    for j = 1:3
+        ax = subplot(nI,3,(k-1)*3+j);
+        imagesc(ax,xObs,yObs,methods{j}{k});
+        set(ax,'YDir','normal','FontName','Arial','FontSize',9);
+        axis(ax,'image'); axis(ax,'tight'); caxis(ax,clims(j,:));
+        xlabel(ax,'x (m)');
+        if j == 1, ylabel(ax,sprintf('%d°\ny (m)',inclinations(k))); else, ylabel(ax,'y (m)'); end
+        title(ax,sprintf('%s, inclination %d°',methodNames{j},inclinations(k)), ...
+            'FontName','Arial','FontSize',10,'FontWeight','bold');
+        cb = colorbar(ax);
+        set(cb,'FontName','Arial','FontSize',8);
+        ticks = linspace(clims(j,1),clims(j,2),5);
+        % MATLAB uses 'Ticks'; GNU Octave commonly uses 'ytick'.
+        try
+            set(cb,'Ticks',ticks);
+        catch
+            set(cb,'ytick',ticks);
+        end
+    end
+end
+annotation(figMaps,'textbox',[0.12 0.955 0.76 0.035], ...
+    'String','Figure 4. Effect of magnetization inclination on angular operators (clean field)', ...
+    'EdgeColor','none','HorizontalAlignment','center','FontSize',14,'FontWeight','bold');
+set(figMaps,'PaperPositionMode','auto');
+print(figMaps,'IAF_Figura4_Inclinacao_Mapas.png','-dpng','-r300');
+
+%% 5. Central profiles: compare inclinations within each operator
+[~,iy0] = min(abs(yObs));
+figProfiles = figure('Color','w','Position',[70 50 1300 900], ...
+    'Name','IAF Figure 4 - Inclination profiles');
+profileMethods = {ISA_all,Theta_all,IAF_all};
+colors = {[0.00 0.45 0.74],[0.20 0.20 0.20],[0.85 0.33 0.10]};
+for j = 1:3
+    ax = subplot(3,1,j); hold(ax,'on');
+    for k = 1:nI
+        prof = profileMethods{j}{k}(iy0,:);
+        plot(ax,xObs,prof,'Color',colors{k},'LineWidth',1.6, ...
+            'DisplayName',sprintf('%d°',inclinations(k)));
+    end
+    yl = ylim(ax);
+    % Mark the four known lateral boundaries without adding them to the legend.
+    bounds = [shallow.x deep.x];
+    for b = 1:numel(bounds)
+        plot(ax,[bounds(b) bounds(b)],yl,'k--','LineWidth',1.0, ...
+            'HandleVisibility','off');
+    end
+    ylim(ax,yl); xlim(ax,[min(xObs) max(xObs)]);
+    grid(ax,'on'); box(ax,'on');
+    if j == 1
+        set(ax,'YTick',[-1 -0.5 0 0.5 1],'FontSize',9);
+    elseif j == 2
+        set(ax,'YTick',[0 0.5 1 1.5 2 2.5 3],'FontSize',9);
+    else
+        set(ax,'YTick',[0.2 0.4 0.6 0.8 1.0 1.2 1.4],'FontSize',9);
+    end
+    ylabel(ax,[methodNames{j} ' (rad)']);
+    title(ax,sprintf('%s - central profile (y = 0 m)',methodNames{j}), ...
+        'FontWeight','bold');
+    if j == 1, legend(ax,'Location','northoutside','Orientation','horizontal'); end
+    if j == 3, xlabel(ax,'x (m)'); else, set(ax,'XTickLabel',[]); end
+end
+set(figProfiles,'PaperPositionMode','auto');
+print(figProfiles,'IAF_Figura4_Inclinacao_Perfis.png','-dpng','-r300');
+
+%% 6. Quantitative contact-localization evaluation
+% Use the same independent peak-detection and post-detection matching
+% criteria as Figure 3 V10 for consistency across figures.
+trueContacts = [shallow.x(1), shallow.x(2), deep.x(1), deep.x(2)];
+minPeakSeparation = 30;       % m
+associationTolerance = 50;    % m
+profileMethods = {ISA_all, Theta_all, IAF_all};
+operatorNames = {'ISA','Theta','IAF'};
+
+% Dimensions: operator x inclination x contact
+estimatedContacts = NaN(3,nI,numel(trueContacts));
+contactErrors = NaN(3,nI,numel(trueContacts));
+detectionRates = NaN(3,nI);
+meanErrors = NaN(3,nI);
+allPeakPositions = cell(3,nI);
+allPeakStrengths = cell(3,nI);
+
+for op = 1:3
+    for k = 1:nI
+        prof = profileMethods{op}{k}(iy0,:);
+        [p,s] = detect_profile_peaks(xObs,prof,minPeakSeparation);
+        allPeakPositions{op,k} = p;
+        allPeakStrengths{op,k} = s;
+        [matchedX,~] = match_peaks_tolerance(p,s,trueContacts,associationTolerance);
+        estimatedContacts(op,k,:) = matchedX;
+        errs = abs(matchedX-trueContacts);
+        contactErrors(op,k,:) = errs;
+        matched = ~isnan(errs);
+        detectionRates(op,k) = sum(matched)/numel(trueContacts);
+        if any(matched)
+            meanErrors(op,k) = mean(errs(matched));
+        end
+    end
+end
+
+fprintf('\\nFIGURE 4 CONTACT-LOCALIZATION EVALUATION\\n');
+fprintf('Peak detection: local maxima of |d(profile)/dx|; minimum separation = %g m\\n',minPeakSeparation);
+fprintf('Post-detection matching tolerance = +/- %g m\\n',associationTolerance);
+fprintf('True contacts (m): %s\\n\\n',mat2str(trueContacts));
+for op = 1:3
+    for k = 1:nI
+        nMatched = round(detectionRates(op,k)*numel(trueContacts));
+        fprintf('%s, inclination %d deg: %d/4 contacts matched (%.0f%%); mean absolute error among matched = ', ...
+            operatorNames{op},inclinations(k),nMatched,100*detectionRates(op,k));
+        if isnan(meanErrors(op,k))
+            fprintf('undefined (no matched contacts)\\n');
+        else
+            fprintf('%.2f m\\n',meanErrors(op,k));
+        end
+        fprintf('  detected peak positions (m): %s\\n',mat2str(allPeakPositions{op,k}));
+        fprintf('  matched contact estimates (m; NaN = missed): %s\\n',mat2str(squeeze(estimatedContacts(op,k,:))'));
+    end
+end
+fprintf('Interpret mean error together with detection rate; mean error is conditional on matched contacts.\\n');
+
+% Plot detection rate and conditional mean absolute error separately.
+figEval = figure('Color','w','Position',[100 100 1350 900], ...
+    'Name','IAF Figure 4 - Contact evaluation');
+
+subplot(2,1,1);
+bar(100*detectionRates');
+set(gca,'XTick',1:nI,'XTickLabel',arrayfun(@(v)sprintf('%d°',v),inclinations,'UniformOutput',false), ...
+    'FontName','Arial','FontSize',10);
+set(gca,'FontName','Arial','FontSize',10,'LooseInset',max(get(gca,'TightInset'),0.02));
+ylabel('Contact detection rate (%)');
+title('Contact detection rate by inclination');
+legend(operatorNames,'Location','northoutside','Orientation','horizontal');
+ylim([0 110]); grid on; box on;
+
+subplot(2,1,2);
+bar(meanErrors');
+set(gca,'XTick',1:nI,'XTickLabel',arrayfun(@(v)sprintf('%d°',v),inclinations,'UniformOutput',false), ...
+    'FontName','Arial','FontSize',10);
+set(gca,'FontName','Arial','FontSize',10,'LooseInset',max(get(gca,'TightInset'),0.02));
+ylabel('Mean absolute localization error (m)');
+title('Localization error among matched contacts');
+legend(operatorNames,'Location','northoutside','Orientation','horizontal');
+grid on; box on;
+
+set(figEval,'PaperPositionMode','auto');
+print(figEval,'IAF_Figura4_Contact_Evaluation.png','-dpng','-r300');
+
+%% 6. Save arrays and parameters for reproducibility
+save('IAF_Figura4_Inclinacao_Data.mat','xObs','yObs','dxObs','dyObs', ...
+    'inclinations','declination','M','mu0_over_4pi','epsilon', ...
+    'zTop','zObs','zBottom','shallow','deep','T_all','ISA_all','Theta_all', ...
+    'IAF_all','clims','trueContacts','minPeakSeparation','associationTolerance', ...
+    'estimatedContacts','contactErrors','detectionRates','meanErrors', ...
+    'allPeakPositions','allPeakStrengths');
+
+fprintf('\nFigure 4 inclination test completed.\n');
+fprintf('Inclinations tested: %s degrees\n',mat2str(inclinations));
+fprintf('Declination fixed at %.1f degrees; M fixed at %.3g.\n',declination,M);
+fprintf('Magnetization and inducing-field directions are parallel for every case.\n');
+fprintf('Exported: IAF_Figura4_Inclinacao_Mapas.png\n');
+fprintf('Exported: IAF_Figura4_Inclinacao_Perfis.png\n');
+fprintf('Exported: IAF_Figura4_Inclinacao_Data.mat\n');
+fprintf('Exported: IAF_Figura4_Contact_Evaluation.png\n');
+end
+
+function [ISA,Theta,IAF,ASA] = operators_from_derivatives(dTdx,dTdz,epsilon)
+    ASA = hypot(dTdx,dTdz);
+    ratio = dTdz./(ASA+epsilon);
+    ratio = max(-1,min(1,ratio));
+    ISA = atan(ratio);
+    Theta = acos(ratio);
+    IAF = (ISA+Theta)./2;
+end
+
+function [srcX,srcY,srcZ,cellVol] = prism_cells(xLim,yLim,zLim,n)
+    xEdges = linspace(xLim(1),xLim(2),n(1)+1);
+    yEdges = linspace(yLim(1),yLim(2),n(2)+1);
+    zEdges = linspace(zLim(1),zLim(2),n(3)+1);
+    xc = (xEdges(1:end-1)+xEdges(2:end))/2;
+    yc = (yEdges(1:end-1)+yEdges(2:end))/2;
+    zc = (zEdges(1:end-1)+zEdges(2:end))/2;
+    [VX,VY,VZ] = ndgrid(xc,yc,zc);
+    srcX = VX(:); srcY = VY(:); srcZ = VZ(:);
+    cellVol = ((xLim(2)-xLim(1))/n(1))* ...
+              ((yLim(2)-yLim(1))/n(2))* ...
+              ((zLim(2)-zLim(1))/n(3));
+end
+
+function TnT = total_field_variable_cells(X,Y,zObs,srcX,srcY,srcZ,cellVol,M,mHat,fHat,mu0_over_4pi)
+    Bx = zeros(size(X)); By = zeros(size(X)); Bz = zeros(size(X));
+    for k = 1:numel(srcX)
+        moment = M*cellVol(k)*mHat;
+        rx = X-srcX(k); ry = Y-srcY(k); rz = zObs-srcZ(k);
+        r2 = rx.^2+ry.^2+rz.^2;
+        r = sqrt(r2); r3 = r2.*r; r5 = r3.*r2;
+        mdotr = moment(1).*rx+moment(2).*ry+moment(3).*rz;
+        Bx = Bx+mu0_over_4pi*(3.*rx.*mdotr./r5-moment(1)./r3);
+        By = By+mu0_over_4pi*(3.*ry.*mdotr./r5-moment(2)./r3);
+        Bz = Bz+mu0_over_4pi*(3.*rz.*mdotr./r5-moment(3)./r3);
+    end
+    TnT = (fHat(1).*Bx+fHat(2).*By+fHat(3).*Bz)*1e9;
+end
+
+
+function [peakX,peakStrength] = detect_profile_peaks(x,profile,minSeparation)
+    dx = x(2)-x(1);
+    strength = abs(gradient(profile,dx));
+    idx = [];
+    for i = 2:numel(strength)-1
+        if strength(i) >= strength(i-1) && strength(i) > strength(i+1)
+            idx(end+1) = i; %#ok<AGROW>
+        end
+    end
+    if isempty(idx)
+        peakX = []; peakStrength = []; return;
+    end
+    [~,order] = sort(strength(idx),'descend');
+    chosen = [];
+    for j = 1:numel(order)
+        candidate = idx(order(j));
+        if isempty(chosen) || all(abs(x(candidate)-x(chosen)) >= minSeparation)
+            chosen(end+1) = candidate; %#ok<AGROW>
+        end
+    end
+    chosen = sort(chosen);
+    peakX = x(chosen);
+    peakStrength = strength(chosen);
+end
+
+function [matchedX,matchedS] = match_peaks_tolerance(peakX,peakS,trueContacts,tolerance)
+    n = numel(peakX);
+    m = numel(trueContacts);
+    matchedX = NaN(1,m);
+    matchedS = NaN(1,m);
+    usedPeaks = false(1,n);
+    currentX = NaN(1,m);
+    currentS = NaN(1,m);
+    [matchedX,matchedS,~,~] = search_matches(1,peakX,peakS,trueContacts, ...
+        tolerance,usedPeaks,currentX,currentS,0,0,matchedX,matchedS,-1,Inf);
+end
+
+function [bestX,bestS,bestCount,bestDistance] = search_matches( ...
+    contactIdx,peakX,peakS,trueContacts,tolerance,usedPeaks,currentX,currentS, ...
+    currentCount,currentDistance,bestX,bestS,bestCount,bestDistance)
+    m = numel(trueContacts);
+    n = numel(peakX);
+    if contactIdx > m
+        if currentCount > bestCount || ...
+           (currentCount == bestCount && currentDistance < bestDistance)
+            bestX = currentX; bestS = currentS;
+            bestCount = currentCount; bestDistance = currentDistance;
+        end
+        return;
+    end
+    [bestX,bestS,bestCount,bestDistance] = search_matches( ...
+        contactIdx+1,peakX,peakS,trueContacts,tolerance,usedPeaks, ...
+        currentX,currentS,currentCount,currentDistance,bestX,bestS,bestCount,bestDistance);
+    for i = 1:n
+        d = abs(peakX(i)-trueContacts(contactIdx));
+        if ~usedPeaks(i) && d <= tolerance
+            nextUsed = usedPeaks; nextUsed(i) = true;
+            nextX = currentX; nextS = currentS;
+            nextX(contactIdx) = peakX(i); nextS(contactIdx) = peakS(i);
+            [bestX,bestS,bestCount,bestDistance] = search_matches( ...
+                contactIdx+1,peakX,peakS,trueContacts,tolerance,nextUsed, ...
+                nextX,nextS,currentCount+1,currentDistance+d, ...
+                bestX,bestS,bestCount,bestDistance);
+        end
+    end
+end
